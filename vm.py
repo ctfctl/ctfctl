@@ -688,9 +688,9 @@ def ls(vm=None):
     fallback_ip = 'unassigned'
 
     droplets = sorted(get(vm), key=lambda d: d.name)
-    name_length = max([len(d.name) for d in droplets]) + 1
-    ip_length = max([len(d.ip_address or fallback_ip) for d in droplets]) + 2
-    status_length = max([len(d.status) for d in droplets]) + 1
+    name_length = max([len(d.name) for d in droplets]) + 1 if droplets else 1
+    ip_length = max([len(d.ip_address or fallback_ip) for d in droplets]) + 2 if droplets else 2
+    status_length = max([len(d.status) for d in droplets]) + 1 if droplets else 1
     header = 'name'.ljust(name_length) + \
              'ip'.rjust(ip_length // 2 + 2).ljust(ip_length) + ' ' + \
              'cpu '.rjust(4) + \
