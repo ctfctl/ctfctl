@@ -64,6 +64,9 @@ from shell import green
 from shell import yellow
 from shell import bright
 
+from yaml import safe_load
+from yaml import dump
+
 
 if 'TOKEN' not in environ:
     print('ERROR: missing env var TOKEN (digital ocean access token)')
@@ -281,8 +284,40 @@ def bootstrap(name, wait=True):
                     print('\n[-] Failed to spawn in time, retrying...')
                     return False
 
+            # start prometheus node exporter
+            ssh(droplet, ["systemctl start prometheus-node-exporter"])
+            add_prometheus_monitoring(name)
+
         print(f'{name}: -> {droplet.ip_address}')
         return True
+
+
+def add_prometheus_monitoring(vm_name):
+    # check if prometheus vm is running, and add this service to be monitored
+    if not get("prometheus"):
+        create("prometheus")
+
+    prometheus_droplet = get("prometheus")[0]
+    ssh(prometheus_droplet, [
+        "systemctl stop prometheus",
+        "pacman --noconfirm --needed -Syu prometheus grafana",
+        "systemctl start grafana",
+        "systemctl start prometheus"])
+
+    existing_conf, _ = ssh(prometheus_droplet, "cat /etc/prometheus/prometheus.yml", print_streams=False)
+    parsed = safe_load(existing_conf)
+    scrape_configs = parsed["scrape_configs"]
+    droplet = get(vm_name)[0]
+    if [c for c in scrape_configs if c["job_name"] == vm_name]:
+        print(f"we already have the prometheus config for {vm_name}: {scrape_configs}")
+    else:
+        scrape_configs.append({
+            "job_name": vm_name,
+            "static_configs": [{"targets": [f"'{droplet.ip_address}:9100'"]}]
+            })
+        ssh(prometheus_droplet, [
+            f"echo '{dump(parsed, default_flow_style=False)}' > /etc/prometheus/prometheus.yml",
+            "systemctl restart prometheus"])
 
 
 def challenge(vm, challenge_path, run=True):

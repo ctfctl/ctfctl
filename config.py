@@ -12,6 +12,7 @@ vm_bootstrap_timeout = 300
 
 vm_default_packages = ['vim',
                        'docker',
+                       'prometheus-node-exporter',
                        'lsof',
                        'wget',
                        'curl',
