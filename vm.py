@@ -55,6 +55,7 @@ from util import transfer_status
 from util import droplet_action_wait
 from util import print_status_cycle
 from util import get_expose_port
+from util import get_systemd_timer_service
 
 from shell import sigwinch_passthrough
 from shell import query_yes_no
@@ -523,28 +524,16 @@ def create_backup(from_vm_name, to_vm_name="backup"):
 
     ssh(from_vm_name, f"echo '{public_key}' >> /root/.ssh/authorized_keys")
 
-    # TODO FIXME refactor this
     backup_script_path = f"/root/backup_{from_vm_name}.sh"
 
-    timer = f"""[Unit]
-Description=Backup-{from_vm_name}
+    systemd_configs = get_systemd_timer_service(
+            f"Backup-{from_vm_name}",
+            f"{backup_script_path}"
+            )
 
-[Timer]
-OnBootSec=1s
-OnUnitActiveSec=10m
+    timer = systemd_configs["timer"]
+    service = systemd_configs["service"]
 
-[Install]
-WantedBy=timers.target
-"""
-
-    service = f"""[Unit]
-Description=Backup-{from_vm_name}
-
-[Service]
-ExecStart={backup_script_path}
-"""
-
-#    backup_oneliner = f'ssh -oStrictHostKeyChecking=no {ip_addr} "tar -cjf - /root/ctf/CTFd/ | cat" > /root/backups/$(date +%Y-%m-%d-%R).tar.gz'
     commands = [f"echo '{private_key}' > /root/.ssh/id_{from_vm_name}_rsa",
                 f"chmod 0600 /root/.ssh/id_{from_vm_name}_rsa",
                 "pacman --noconfirm --needed -Syu borg socat",
@@ -559,7 +548,7 @@ ExecStart={backup_script_path}
                 # performing push from remote
                 f"echo 'ssh -i /root/.ssh/id_{from_vm_name}_rsa -oStrictHostKeyChecking=no -R 12345:localhost:12345 {ip_addr} BORG_RSH=\"/root/socat-wrap.sh\" BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=yes borg create --stats ssh://foo/root/backups::{from_vm_name}-$(date +%Y-%m-%d-%R) /root/' >> {backup_script_path}",
 
-                f"chmod +x {backup_script_path}",\
+                f"chmod +x {backup_script_path}",
 
                 f"echo '{timer}' > /etc/systemd/system/backup_{from_vm_name}.timer",
                 f"echo '{service}' > /etc/systemd/system/backup_{from_vm_name}.service",

@@ -44,6 +44,28 @@ def get_expose_port(challenge_path):
             f.read().splitlines()))).split()[1]
 
 
+def get_systemd_timer_service(name, command, on_boot_sec="1s", on_active_sec="10m"):
+    timer = f"""[Unit]
+Description={name}
+
+[Timer]
+OnBootSec={on_boot_sec}
+OnUnitActiveSec={on_active_sec}
+
+[Install]
+WantedBy=timers.target
+"""
+
+    service = f"""[Unit]
+Description={name}
+
+[Service]
+ExecStart={command}
+"""
+
+    return {"timer": timer, "service": service}
+
+
 def droplet_action_wait(action, update_wait=1, callback=print_status_string,
                         callback_wait=0.2, timeout=0):
     """wait until the action is marked as completed or with an error.
