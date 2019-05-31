@@ -1,0 +1,7 @@
+localhost:1337 # Your site's address
+
+ext .html   # Clean URLs
+log ./access.log
+
+# API load balancer
+proxy / localhost:8000

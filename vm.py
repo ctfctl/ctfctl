@@ -86,10 +86,6 @@ def help():
         print(f'- {name}')
 
 
-# created_at
-# take_snapshot(self, snapshot_name, return_dict=True, power_off=False)
-# restore(self, image_id, return_dict=True)
-# get_snapshots(self):
 
 @command
 def add_pub_key(path, name):
@@ -497,6 +493,85 @@ def health_status(vm=None, show_pwn=True, show_system=True, monitoring_name='mon
 
 
 @command
+def create_backup(from_vm_name, to_vm_name="backup"):
+    """Creates a backup droplet if needed and syncs the data from the
+    vm {from_vm_name} to the backup every 10 minutes"""
+
+    if not get(from_vm_name):
+        print(f"could not find to-be-backuped vm {from_vm_name}!")
+        return
+
+    if not get(to_vm_name):
+        print(f"could not find backup server for vm {to_vm_name}. Will create one.")
+        create(to_vm_name)
+
+    ip_addr = get(from_vm_name)[0].ip_address
+
+    # generate keys for backup server
+    key = rsa.generate_private_key(
+        backend=crypto_default_backend(),
+        public_exponent=65537,
+        key_size=2048)
+
+    private_key = key.private_bytes(
+        crypto_serialization.Encoding.PEM,
+        crypto_serialization.PrivateFormat.PKCS8,
+        crypto_serialization.NoEncryption()).decode('utf8')
+    public_key = key.public_key().public_bytes(
+        crypto_serialization.Encoding.OpenSSH,
+        crypto_serialization.PublicFormat.OpenSSH).decode('utf8')
+
+    ssh(from_vm_name, f"echo '{public_key}' >> /root/.ssh/authorized_keys")
+
+    # TODO FIXME refactor this
+    backup_script_path = f"/root/backup_{from_vm_name}.sh"
+
+    timer = f"""[Unit]
+Description=Backup-{from_vm_name}
+
+[Timer]
+OnBootSec=1s
+OnUnitActiveSec=10m
+
+[Install]
+WantedBy=timers.target
+"""
+
+    service = f"""[Unit]
+Description=Backup-{from_vm_name}
+
+[Service]
+ExecStart={backup_script_path}
+"""
+
+#    backup_oneliner = f'ssh -oStrictHostKeyChecking=no {ip_addr} "tar -cjf - /root/ctf/CTFd/ | cat" > /root/backups/$(date +%Y-%m-%d-%R).tar.gz'
+    commands = [f"echo '{private_key}' > /root/.ssh/id_{from_vm_name}_rsa",
+                f"chmod 0600 /root/.ssh/id_{from_vm_name}_rsa",
+                "pacman --noconfirm --needed -Syu borg socat",
+
+                # init the borg repo
+                "mkdir -p /root/backups",
+                "borg init -e none /root/backups",
+
+                # listening to connections
+                f"echo '#!/bin/sh' > {backup_script_path}",
+                f"echo 'socat TCP-LISTEN:12345,fork \"EXEC:borg serve --append-only --restrict-to-path /root/backups/ --umask 077\"&' >> {backup_script_path}",
+                # performing push from remote
+                f"echo 'ssh -i /root/.ssh/id_{from_vm_name}_rsa -oStrictHostKeyChecking=no -R 12345:localhost:12345 {ip_addr} BORG_RSH=\"/root/socat-wrap.sh\" BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=yes borg create --stats ssh://foo/root/backups::{from_vm_name}-$(date +%Y-%m-%d-%R) /root/' >> {backup_script_path}",
+
+                f"chmod +x {backup_script_path}",\
+
+                f"echo '{timer}' > /etc/systemd/system/backup_{from_vm_name}.timer",
+                f"echo '{service}' > /etc/systemd/system/backup_{from_vm_name}.service",
+
+                "systemctl daemon-reload",
+                f"systemctl start backup_{from_vm_name}.timer",
+                f"systemctl enable --now backup_{from_vm_name}.timer"]
+    ssh(to_vm_name, commands)
+
+    print(f'[*] created backup job for vm {from_vm_name}')
+
+@command
 def provision_ctfd(name="ctfd", backup_name="ctfd-backup"):
     """Creates a ctfd vm and a backup vm which will dump all the ctfd data
     every 10 minutes.
@@ -515,68 +590,22 @@ def provision_ctfd(name="ctfd", backup_name="ctfd-backup"):
         if not query_yes_no(f'There already exists a {name} vm. Sure you want to re-provision it?'):
             return
 
-    if not get(backup_name):
-        print(f"could not find backup server for vm {backup_name}. Will create one.")
-        create(backup_name, bootstrap_vm=False)
+    ssh(name, ["pacman --noconfirm --needed -Syu docker-compose git borg socat",
+               "git clone https://github.com/CTFd/CTFd.git ./CTFd",
+               # generate secret key
+               '''python -c "import os; f=open('./CTFd/.ctfd_secret_key', 'ba+');f.write(os.urandom(64)); f.close()"'''])
 
-    # copy the ctfd repo, and start it
-    copy_to(name, "./CTFd", "CTFd")
-    ssh(name, ["chmod +x /root/ctf/CTFd/docker-entrypoint.sh",
-               "pacman --noconfirm --needed -Syu docker-compose",
-               "docker-compose -f /root/ctf/CTFd/docker-compose.yml up -d"])
+    copy_to(name, "./ctfd-config/ctfd-docker-compose.yml", "/root/CTFd/docker-compose.yml")
+    copy_to(name, "./ctfd-config/Caddyfile", "/root/CTFd/Caddyfile")
 
-    ip_addr = get(name)[0].ip_address
+    ssh(name, ["chmod +x /root/CTFd/docker-entrypoint.sh",
+               "docker-compose -f /root/CTFd/docker-compose.yml up -d",
+               "echo '#!/bin/bash' > /root/socat-wrap.sh",
+               "echo 'exec socat STDIO TCP-CONNECT:localhost:12345' >> /root/socat-wrap.sh",
+               "chmod +x /root/socat-wrap.sh"])
+    create_backup("ctfd")
 
-    # generate keys for backup server
-    key = rsa.generate_private_key(
-        backend=crypto_default_backend(),
-        public_exponent=65537,
-        key_size=2048)
-
-    private_key = key.private_bytes(
-        crypto_serialization.Encoding.PEM,
-        crypto_serialization.PrivateFormat.PKCS8,
-        crypto_serialization.NoEncryption()).decode('utf8')
-    public_key = key.public_key().public_bytes(
-        crypto_serialization.Encoding.OpenSSH,
-        crypto_serialization.PublicFormat.OpenSSH).decode('utf8')
-
-    ssh(name, f"echo '{public_key}' >> /root/.ssh/authorized_keys")
-
-    # TODO FIXME refactor this
-    timer = f"""[Unit]
-Description=Backup
-
-[Timer]
-OnBootSec=1s
-OnUnitActiveSec=10m
-
-[Install]
-WantedBy=timers.target
-"""
-
-    service = f"""[Unit]
-Description=Backup
-
-[Service]
-ExecStart=/root/backup.sh
-"""
-
-    backup_oneliner = f'ssh -oStrictHostKeyChecking=no {ip_addr} "tar -cjf - /root/ctf/CTFd/ | cat" > /root/backups/$(date +%Y-%m-%d-%R).tar.gz'
-    commands = [f"echo '{private_key}' > /root/.ssh/id_rsa",
-                "chmod 0600 /root/.ssh/id_rsa",
-                "echo '#!/bin/sh' > /root/backup.sh",
-                f"echo '{backup_oneliner}' >> /root/backup.sh",
-                "chmod +x /root/backup.sh",
-                f"echo '{timer}' > /etc/systemd/system/backup.timer",
-                f"echo '{service}' > /etc/systemd/system/backup.service",
-                "systemctl daemon-reload",
-                "mkdir -p /root/backups",
-                "systemctl start backup.timer",
-                "systemctl enable --now backup.timer" ]
-    ssh(backup_name, commands)
-
-    print(f"[*] Done. Enjoy the ctfd at {get(name)[0].ip_address} and the backup_server at {get(backup_name)[0].ip_address}")
+    print(f"[*] Done.")
 
 @command
 def resize(vm, cpu=None, ram=None):
