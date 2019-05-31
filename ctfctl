@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+from traitlets.config.loader import Config
+from IPython.terminal.embed import InteractiveShellEmbed
+from os import chdir
+
+from config import basedir
+from shell import CTFPrompt
+from shell import banner
+
+import vm
+
+cfg = Config()
+cfg.InteractiveShellEmbed.local_ns = {'vm': vm}
+cfg.InteractiveShellEmbed.global_ns = {'vm': vm}
+cfg.TerminalInteractiveShell.confirm_exit = False
+cfg.TerminalInteractiveShell.prompts_class = CTFPrompt
+cfg.TerminalInteractiveShell.editor = 'vim'
+cfg.TerminalInteractiveShell.editing_mode = 'vi'
+cfg.InteractiveShell.colors = 'linux'
+cfg.InteractiveShellApp.extensions = ['autoreload']
+cfg.InteractiveShellApp.exec_lines = ['%autoreload 2']
+cfg.PrefilterManager.multi_line_specials = True
+
+
+def help(what=None):
+    if 'help' in dir(what):
+        what.help()
+        return
+
+    print("Available modules:")
+    for name, module in sorted(cfg.InteractiveShellEmbed.local_ns.items(),
+                               key=lambda item: item[0]):
+        print(f'- {name}')
+
+
+shell = InteractiveShellEmbed(
+    config=cfg,
+    banner1=banner,
+    banner2='Welcome to ctf mission control\n')
+
+chdir(basedir)
+shell()
